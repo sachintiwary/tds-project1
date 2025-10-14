@@ -1,0 +1,4 @@
+# requirements.txt
+flask
+python-dotenv
+gunicorn # Important for deploying Flask on Render
