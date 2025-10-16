@@ -60,7 +60,11 @@ def generate_code_from_brief(brief_text, checks, attachments=None):
                 attachments_content += f"File Name: `{attachment['name']}`\nContent:\n```\n{decoded_content}\n```\n"
             except Exception as e:
                 print(f"🚨 Error decoding attachment {attachment['name']}: {e}")
-    user_prompt = f"BRIEF:\n---\n{brief_text}\n---\nEVALUATION CHECKS TO PASS:\n---\n{checks}{attachments_content}"
+
+    # Format checks for better LLM comprehension
+    formatted_checks = '\n'.join([f"- {check}" for check in checks]) if checks else ""
+    user_prompt = f"BRIEF:\n---\n{brief_text}\n---\nEVALUATION CHECKS TO PASS:\n---\n{formatted_checks}{attachments_content}"
+
     try:
         response = client.chat.completions.create(
             model="gpt-4.1-nano",
@@ -72,6 +76,28 @@ def generate_code_from_brief(brief_text, checks, attachments=None):
         return html_code
     except Exception as e:
         print(f"🚨 LLM Error: {e}")
+        return None
+
+def generate_revision_from_brief(new_brief, existing_html):
+    """Generates a revised version of the HTML code."""
+    print("🤖 Sending existing code and new brief to LLM for revision...")
+    system_prompt = (
+        "You are an expert web developer who revises code. Your task is to update an existing `index.html` file based on a new request. "
+        "Your response MUST be ONLY the complete, updated HTML code. Do not include explanations."
+    )
+    user_prompt = f"NEW REQUEST:\n---\n{new_brief}\n\n--- EXISTING `index.html` CODE TO REVISE ---\n```html\n{existing_html}\n```"
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+        )
+        raw_code = response.choices[0].message.content
+        updated_html = clean_llm_output(raw_code)
+        print("🤖 LLM generated the revised code!")
+        return updated_html
+    except Exception as e:
+        print(f"🚨 LLM Revision Error: {e}")
         return None
 
 def generate_professional_readme(brief, code):
@@ -96,7 +122,6 @@ def generate_professional_readme(brief, code):
         print(f"🚨 README Generation Error: {e}")
         return f"# Project\n\nFailed to generate README. See logs for details."
 
-
 def create_github_repo(repo_name, html_content, brief):
     """Creates a GitHub repo, pushes code, LICENSE, and a professional README."""
     print(f"🐙 Creating GitHub repo: {repo_name}")
@@ -119,9 +144,10 @@ def enable_github_pages(repo):
     """Enables GitHub Pages for the repository."""
     print("📜 Enabling GitHub Pages...")
     try:
+        default_branch = repo.default_branch
         pages_url = f"https://api.github.com/repos/{repo.full_name}/pages"
         headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}", "Accept": "application/vnd.github.v3+json"}
-        payload = {"source": {"branch": "main", "path": "/"}}
+        payload = {"source": {"branch": default_branch, "path": "/"}}
         response = requests.post(pages_url, headers=headers, json=payload)
         if response.status_code == 201:
             print("📜 GitHub Pages enabled successfully.")
@@ -155,21 +181,41 @@ def notify_evaluation_api(data, repo_url, pages_url, commit_sha):
         delay *= 2
     print("🚨 Failed to notify evaluation API after multiple retries.")
 
+def validate_generated_code(html_code, checks):
+    """Basic validation to ensure generated code aligns with checks."""
+    if not checks:
+        return True
+    # Simple checks: ensure HTML contains certain keywords from checks
+    for check in checks:
+        if "url=" in check.lower() and "?url=" not in html_code:
+            print(f"🚨 Validation Warning: Check '{check}' not satisfied in generated code.")
+            return False
+        # Add more validations as needed
+    return True
+
 # --- BACKGROUND WORKERS ---
 
 def process_build_request(data):
     """The main worker for Round 1: Build and Deploy."""
     html_code = generate_code_from_brief(data.get('brief'), data.get('checks'), data.get('attachments'))
     if not html_code:
-        return print("Stopping process due to LLM failure.")
+        print("Stopping process due to LLM failure.")
+        return
+
+    # --- VALIDATION STEP ---
+    if not validate_generated_code(html_code, data.get('checks')):
+        print("Stopping process due to validation failure.")
+        return
 
     repo = create_github_repo(data.get('task'), html_code, data.get('brief'))
     if not repo:
-        return print("Stopping process due to GitHub repo creation failure.")
+        print("Stopping process due to GitHub repo creation failure.")
+        return
 
     pages_url = enable_github_pages(repo)
     if not pages_url:
-        return print("Stopping process due to GitHub Pages failure.")
+        print("Stopping process due to GitHub Pages failure.")
+        return
 
     commit_sha = repo.get_contents("index.html").sha
     notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
@@ -182,39 +228,46 @@ def process_revise_request(data):
     try:
         repo = g.get_user().get_repo(repo_name)
     except UnknownObjectException:
-        return print(f"🚨 Round 2 Error: Repository '{repo_name}' not found.")
-    
-    # Fetch existing code
+        print(f"🚨 Round 2 Error: Repository '{repo_name}' not found.")
+        return
+
     try:
         existing_html_file = repo.get_contents("index.html")
+        existing_readme_file = repo.get_contents("README.md")
         existing_html = existing_html_file.decoded_content.decode('utf-8')
     except Exception as e:
-        return print(f"🚨 Round 2 Error: Could not fetch existing index.html. {e}")
+        print(f"🚨 Round 2 Error: Could not fetch existing files. {e}")
+        return
 
-    # Generate updated code
     new_brief = data.get('brief')
-    print("🤖 Sending existing code and new brief to LLM for revision...")
-    system_prompt = "You are an expert web developer who revises code. Your task is to update an existing `index.html` file based on a new request. Your response MUST be ONLY the complete, updated HTML code."
-    user_prompt = f"NEW REQUEST:\n---\n{new_brief}\n\n--- EXISTING `index.html` CODE ---\n```html\n{existing_html}\n```"
-    # Re-use the generation function for the revision
-    updated_html = generate_code_from_brief(new_brief, data.get('checks')) # Simplified for revision
+    updated_html = generate_revision_from_brief(new_brief, existing_html)
     if not updated_html:
-        return print("Stopping Round 2 due to LLM failure.")
-        
-    # Update the file on GitHub
+        print("Stopping Round 2 due to LLM failure.")
+        return
+
+    # --- VALIDATION STEP ---
+    if not validate_generated_code(updated_html, data.get('checks')):
+        print("Stopping Round 2 due to validation failure.")
+        return
+
     try:
-        update_response = repo.update_file(
-            path="index.html",
-            message="feat: revise application for round 2",
-            content=updated_html,
-            sha=existing_html_file.sha
+        update_html_response = repo.update_file(
+            path="index.html", message="feat: revise application for round 2",
+            content=updated_html, sha=existing_html_file.sha
         )
-        commit_sha = update_response['commit'].sha
-        print("🐙 Updated index.html in the repo.")
+        updated_readme = generate_professional_readme(new_brief, updated_html)
+        update_readme_response = repo.update_file(
+            path="README.md", message="docs: update README for round 2",
+            content=updated_readme, sha=existing_readme_file.sha
+        )
+        commit_sha = update_html_response['commit'].sha
+        print("🐙 Updated index.html and README.md in the repo.")
     except Exception as e:
-        return print(f"🚨 Round 2 Error: Failed to update file on GitHub. {e}")
+        print(f"🚨 Round 2 Error: Failed to update files on GitHub. {e}")
+        return
         
     pages_url = f"https://{GITHUB_USERNAME}.github.io/{repo.name}/"
+    
     notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
     print("✅✅✅ Round 2 process completed! ✅✅✅")
 
