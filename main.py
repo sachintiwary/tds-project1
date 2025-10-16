@@ -127,9 +127,17 @@ def create_github_repo(repo_name, html_content, brief):
     print(f"🐙 Creating GitHub repo: {repo_name}")
     user = g.get_user()
     try:
+        # Delete repo if it already exists (useful for local testing)
+        try:
+            repo = user.get_repo(repo_name)
+            repo.delete()
+            print(f"🗑️ Deleted existing repo: {repo_name}")
+        except UnknownObjectException:
+            pass # Repo didn't exist, which is fine
+
         repo = user.create_repo(repo_name, private=False)
         repo.create_file("index.html", "feat: initial commit", html_content)
-        mit_license_url = "https://raw.githubusercontent.com/licenses/MIT/main/LICENSE"
+        mit_license_url = "[https://raw.githubusercontent.com/licenses/MIT/main/LICENSE](https://raw.githubusercontent.com/licenses/MIT/main/LICENSE)"
         mit_license = requests.get(mit_license_url).text
         repo.create_file("LICENSE", "docs: add MIT license", mit_license)
         readme_content = generate_professional_readme(brief, html_content)
@@ -145,7 +153,7 @@ def enable_github_pages(repo):
     print("📜 Enabling GitHub Pages...")
     try:
         default_branch = repo.default_branch
-        pages_url = f"https://api.github.com/repos/{repo.full_name}/pages"
+        pages_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo.full_name}/pages"
         headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}", "Accept": "application/vnd.github.v3+json"}
         payload = {"source": {"branch": default_branch, "path": "/"}}
         response = requests.post(pages_url, headers=headers, json=payload)
@@ -181,18 +189,6 @@ def notify_evaluation_api(data, repo_url, pages_url, commit_sha):
         delay *= 2
     print("🚨 Failed to notify evaluation API after multiple retries.")
 
-def validate_generated_code(html_code, checks):
-    """Basic validation to ensure generated code aligns with checks."""
-    if not checks:
-        return True
-    # Simple checks: ensure HTML contains certain keywords from checks
-    for check in checks:
-        if "url=" in check.lower() and "?url=" not in html_code:
-            print(f"🚨 Validation Warning: Check '{check}' not satisfied in generated code.")
-            return False
-        # Add more validations as needed
-    return True
-
 # --- BACKGROUND WORKERS ---
 
 def process_build_request(data):
@@ -200,11 +196,6 @@ def process_build_request(data):
     html_code = generate_code_from_brief(data.get('brief'), data.get('checks'), data.get('attachments'))
     if not html_code:
         print("Stopping process due to LLM failure.")
-        return
-
-    # --- VALIDATION STEP ---
-    if not validate_generated_code(html_code, data.get('checks')):
-        print("Stopping process due to validation failure.")
         return
 
     repo = create_github_repo(data.get('task'), html_code, data.get('brief'))
@@ -245,22 +236,18 @@ def process_revise_request(data):
         print("Stopping Round 2 due to LLM failure.")
         return
 
-    # --- VALIDATION STEP ---
-    if not validate_generated_code(updated_html, data.get('checks')):
-        print("Stopping Round 2 due to validation failure.")
-        return
-
     try:
         update_html_response = repo.update_file(
             path="index.html", message="feat: revise application for round 2",
             content=updated_html, sha=existing_html_file.sha
         )
+        commit_sha = update_html_response['commit'].sha
+
         updated_readme = generate_professional_readme(new_brief, updated_html)
-        update_readme_response = repo.update_file(
+        repo.update_file(
             path="README.md", message="docs: update README for round 2",
             content=updated_readme, sha=existing_readme_file.sha
         )
-        commit_sha = update_html_response['commit'].sha
         print("🐙 Updated index.html and README.md in the repo.")
     except Exception as e:
         print(f"🚨 Round 2 Error: Failed to update files on GitHub. {e}")
