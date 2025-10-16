@@ -78,14 +78,16 @@ def generate_code_from_brief(brief_text, checks, attachments=None):
         print(f"🚨 LLM Error: {e}")
         return None
 
-def generate_revision_from_brief(new_brief, existing_html):
+def generate_revision_from_brief(new_brief, existing_html, checks=None):
     """Generates a revised version of the HTML code."""
     print("🤖 Sending existing code and new brief to LLM for revision...")
     system_prompt = (
         "You are an expert web developer who revises code. Your task is to update an existing `index.html` file based on a new request. "
         "Your response MUST be ONLY the complete, updated HTML code. Do not include explanations."
     )
-    user_prompt = f"NEW REQUEST:\n---\n{new_brief}\n\n--- EXISTING `index.html` CODE TO REVISE ---\n```html\n{existing_html}\n```"
+    # Format checks for better LLM comprehension
+    formatted_checks = '\n'.join([f"- {check}" for check in checks]) if checks else ""
+    user_prompt = f"NEW REQUEST:\n---\n{new_brief}\n---\nEVALUATION CHECKS TO PASS:\n---\n{formatted_checks}\n\n--- EXISTING `index.html` CODE TO REVISE ---\n```html\n{existing_html}\n```"
 
     try:
         response = client.chat.completions.create(
@@ -137,7 +139,7 @@ def create_github_repo(repo_name, html_content, brief):
 
         repo = user.create_repo(repo_name, private=False)
         repo.create_file("index.html", "feat: initial commit", html_content)
-        mit_license_url = "[https://raw.githubusercontent.com/licenses/MIT/main/LICENSE](https://raw.githubusercontent.com/licenses/MIT/main/LICENSE)"
+        mit_license_url = "https://raw.githubusercontent.com/licenses/MIT/main/LICENSE"
         mit_license = requests.get(mit_license_url).text
         repo.create_file("LICENSE", "docs: add MIT license", mit_license)
         readme_content = generate_professional_readme(brief, html_content)
@@ -153,7 +155,7 @@ def enable_github_pages(repo):
     print("📜 Enabling GitHub Pages...")
     try:
         default_branch = repo.default_branch
-        pages_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo.full_name}/pages"
+        pages_url = f"https://api.github.com/repos/{repo.full_name}/pages"
         headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}", "Accept": "application/vnd.github.v3+json"}
         payload = {"source": {"branch": default_branch, "path": "/"}}
         response = requests.post(pages_url, headers=headers, json=payload)
@@ -231,7 +233,7 @@ def process_revise_request(data):
         return
 
     new_brief = data.get('brief')
-    updated_html = generate_revision_from_brief(new_brief, existing_html)
+    updated_html = generate_revision_from_brief(new_brief, existing_html, data.get('checks'))
     if not updated_html:
         print("Stopping Round 2 due to LLM failure.")
         return
