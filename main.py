@@ -195,70 +195,80 @@ def notify_evaluation_api(data, repo_url, pages_url, commit_sha):
 
 def process_build_request(data):
     """The main worker for Round 1: Build and Deploy."""
-    html_code = generate_code_from_brief(data.get('brief'), data.get('checks'), data.get('attachments'))
-    if not html_code:
-        print("Stopping process due to LLM failure.")
-        return
+    try:
+        html_code = generate_code_from_brief(data.get('brief'), data.get('checks'), data.get('attachments'))
+        if not html_code:
+            print("Stopping process due to LLM failure.")
+            return
 
-    repo = create_github_repo(data.get('task'), html_code, data.get('brief'))
-    if not repo:
-        print("Stopping process due to GitHub repo creation failure.")
-        return
+        repo = create_github_repo(data.get('task'), html_code, data.get('brief'))
+        if not repo:
+            print("Stopping process due to GitHub repo creation failure.")
+            return
 
-    pages_url = enable_github_pages(repo)
-    if not pages_url:
-        print("Stopping process due to GitHub Pages failure.")
-        return
+        pages_url = enable_github_pages(repo)
+        if not pages_url:
+            print("Stopping process due to GitHub Pages failure.")
+            return
 
-    commit_sha = repo.get_contents("index.html").sha
-    notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
-    print("✅✅✅ Round 1 process completed! ✅✅✅")
+        commit_sha = repo.get_contents("index.html").sha
+        notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
+        print("✅✅✅ Round 1 process completed! ✅✅✅")
+    except Exception as e:
+        print(f"🚨 Round 1 Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 def process_revise_request(data):
     """The main worker for Round 2: Revise and Redeploy."""
-    repo_name = data.get('task')
-    print(f"🔄 Starting Round 2 revision for repo: {repo_name}")
     try:
-        repo = g.get_user().get_repo(repo_name)
-    except UnknownObjectException:
-        print(f"🚨 Round 2 Error: Repository '{repo_name}' not found.")
-        return
+        repo_name = data.get('task')
+        print(f"🔄 Starting Round 2 revision for repo: {repo_name}")
+        try:
+            repo = g.get_user().get_repo(repo_name)
+        except UnknownObjectException:
+            print(f"🚨 Round 2 Error: Repository '{repo_name}' not found.")
+            return
 
-    try:
-        existing_html_file = repo.get_contents("index.html")
-        existing_readme_file = repo.get_contents("README.md")
-        existing_html = existing_html_file.decoded_content.decode('utf-8')
-    except Exception as e:
-        print(f"🚨 Round 2 Error: Could not fetch existing files. {e}")
-        return
+        try:
+            existing_html_file = repo.get_contents("index.html")
+            existing_readme_file = repo.get_contents("README.md")
+            existing_html = existing_html_file.decoded_content.decode('utf-8')
+        except Exception as e:
+            print(f"🚨 Round 2 Error: Could not fetch existing files. {e}")
+            return
 
-    new_brief = data.get('brief')
-    updated_html = generate_revision_from_brief(new_brief, existing_html, data.get('checks'))
-    if not updated_html:
-        print("Stopping Round 2 due to LLM failure.")
-        return
+        new_brief = data.get('brief')
+        updated_html = generate_revision_from_brief(new_brief, existing_html, data.get('checks'))
+        if not updated_html:
+            print("Stopping Round 2 due to LLM failure.")
+            return
 
-    try:
-        update_html_response = repo.update_file(
-            path="index.html", message="feat: revise application for round 2",
-            content=updated_html, sha=existing_html_file.sha
-        )
-        commit_sha = update_html_response['commit'].sha
+        try:
+            update_html_response = repo.update_file(
+                path="index.html", message="feat: revise application for round 2",
+                content=updated_html, sha=existing_html_file.sha
+            )
+            commit_sha = update_html_response['commit'].sha
 
-        updated_readme = generate_professional_readme(new_brief, updated_html)
-        repo.update_file(
-            path="README.md", message="docs: update README for round 2",
-            content=updated_readme, sha=existing_readme_file.sha
-        )
-        print("🐙 Updated index.html and README.md in the repo.")
-    except Exception as e:
-        print(f"🚨 Round 2 Error: Failed to update files on GitHub. {e}")
-        return
+            updated_readme = generate_professional_readme(new_brief, updated_html)
+            repo.update_file(
+                path="README.md", message="docs: update README for round 2",
+                content=updated_readme, sha=existing_readme_file.sha
+            )
+            print("🐙 Updated index.html and README.md in the repo.")
+        except Exception as e:
+            print(f"🚨 Round 2 Error: Failed to update files on GitHub. {e}")
+            return
+            
+        pages_url = f"https://{GITHUB_USERNAME}.github.io/{repo.name}/"
         
-    pages_url = f"https://{GITHUB_USERNAME}.github.io/{repo.name}/"
-    
-    notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
-    print("✅✅✅ Round 2 process completed! ✅✅✅")
+        notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
+        print("✅✅✅ Round 2 process completed! ✅✅✅")
+    except Exception as e:
+        print(f"🚨 Round 2 Unexpected Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 # --- MAIN API ENDPOINT ---
 @app.route('/api-endpoint', methods=['POST'])
