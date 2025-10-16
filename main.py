@@ -69,13 +69,17 @@ def generate_code_from_brief(brief_text, checks, attachments=None):
         response = client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            timeout=30
         )
+        print("🤖 LLM call completed successfully")
         raw_code = response.choices[0].message.content
         html_code = clean_llm_output(raw_code)
         print("🤖 LLM generated the code!")
         return html_code
     except Exception as e:
         print(f"🚨 LLM Error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def generate_revision_from_brief(new_brief, existing_html, checks=None):
@@ -93,7 +97,9 @@ def generate_revision_from_brief(new_brief, existing_html, checks=None):
         response = client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            timeout=30
         )
+        print("🤖 LLM call completed successfully")
         raw_code = response.choices[0].message.content
         updated_html = clean_llm_output(raw_code)
         print("🤖 LLM generated the revised code!")
