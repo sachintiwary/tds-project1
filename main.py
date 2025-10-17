@@ -3,11 +3,15 @@ import os
 import base64
 import threading
 import time
+import logging
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import openai
 from github import Github, Auth, UnknownObjectException
 import requests
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- SETUP AND CONFIGURATION ---
 load_dotenv()
@@ -43,7 +47,7 @@ def clean_llm_output(raw_output):
 
 def generate_code_from_brief(brief_text, checks, attachments=None):
     """Generates and cleans HTML code from a brief and attachments using the LLM."""
-    print("🤖 Sending brief and attachments to LLM for code generation...")
+    logging.info("🤖 Sending brief and attachments to LLM for code generation...")
     system_prompt = (
         "You are an expert web developer who writes ONLY code. Your task is to build a single-page, self-contained `index.html` file. "
         "Your response MUST be ONLY the complete, raw HTML code for the `index.html` file. "
@@ -59,7 +63,7 @@ def generate_code_from_brief(brief_text, checks, attachments=None):
                 decoded_content = base64.b64decode(encoded).decode('utf-8')
                 attachments_content += f"File Name: `{attachment['name']}`\nContent:\n```\n{decoded_content}\n```\n"
             except Exception as e:
-                print(f"🚨 Error decoding attachment {attachment['name']}: {e}")
+                logging.error(f"🚨 Error decoding attachment {attachment['name']}: {e}")
 
     # Format checks for better LLM comprehension
     formatted_checks = '\n'.join([f"- {check}" for check in checks]) if checks else ""
@@ -71,20 +75,20 @@ def generate_code_from_brief(brief_text, checks, attachments=None):
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             timeout=30
         )
-        print("🤖 LLM call completed successfully")
+        logging.info("🤖 LLM call completed successfully")
         raw_code = response.choices[0].message.content
         html_code = clean_llm_output(raw_code)
-        print("🤖 LLM generated the code!")
+        logging.info("🤖 LLM generated the code!")
         return html_code
     except Exception as e:
-        print(f"🚨 LLM Error: {e}")
+        logging.error(f"🚨 LLM Error: {e}")
         import traceback
         traceback.print_exc()
         return None
 
 def generate_revision_from_brief(new_brief, existing_html, checks=None):
     """Generates a revised version of the HTML code."""
-    print("🤖 Sending existing code and new brief to LLM for revision...")
+    logging.info("🤖 Sending existing code and new brief to LLM for revision...")
     system_prompt = (
         "You are an expert web developer who revises code. Your task is to update an existing `index.html` file based on a new request. "
         "Your response MUST be ONLY the complete, updated HTML code. Do not include explanations."
@@ -99,18 +103,18 @@ def generate_revision_from_brief(new_brief, existing_html, checks=None):
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             timeout=30
         )
-        print("🤖 LLM call completed successfully")
+        logging.info("🤖 LLM call completed successfully")
         raw_code = response.choices[0].message.content
         updated_html = clean_llm_output(raw_code)
-        print("🤖 LLM generated the revised code!")
+        logging.info("🤖 LLM generated the revised code!")
         return updated_html
     except Exception as e:
-        print(f"🚨 LLM Revision Error: {e}")
+        logging.error(f"🚨 LLM Revision Error: {e}")
         return None
 
 def generate_professional_readme(brief, code):
     """Generates a professional README.md for the project."""
-    print("📝 Generating professional README.md...")
+    logging.info("📝 Generating professional README.md...")
     system_prompt = (
         "You are a technical writer. Your task is to create a professional README.md file for a software project."
         "The response should be in clean Markdown format. Do not include any other text."
@@ -127,19 +131,19 @@ def generate_professional_readme(brief, code):
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"🚨 README Generation Error: {e}")
+        logging.error(f"🚨 README Generation Error: {e}")
         return f"# Project\n\nFailed to generate README. See logs for details."
 
 def create_github_repo(repo_name, html_content, brief):
     """Creates a GitHub repo, pushes code, LICENSE, and a professional README."""
-    print(f"🐙 Creating GitHub repo: {repo_name}")
+    logging.info(f"🐙 Creating GitHub repo: {repo_name}")
     user = g.get_user()
     try:
         # Delete repo if it already exists (useful for local testing)
         try:
             repo = user.get_repo(repo_name)
             repo.delete()
-            print(f"🗑️ Deleted existing repo: {repo_name}")
+            logging.info(f"🗑️ Deleted existing repo: {repo_name}")
         except UnknownObjectException:
             pass # Repo didn't exist, which is fine
 
@@ -150,15 +154,15 @@ def create_github_repo(repo_name, html_content, brief):
         repo.create_file("LICENSE", "docs: add MIT license", mit_license)
         readme_content = generate_professional_readme(brief, html_content)
         repo.create_file("README.md", "docs: add professional README", readme_content)
-        print("🐙 Files pushed to repo.")
+        logging.info("🐙 Files pushed to repo.")
         return repo
     except Exception as e:
-        print(f"🚨 GitHub Repo Error: {e}")
+        logging.error(f"🚨 GitHub Repo Error: {e}")
         return None
 
 def enable_github_pages(repo):
     """Enables GitHub Pages for the repository."""
-    print("📜 Enabling GitHub Pages...")
+    logging.info("📜 Enabling GitHub Pages...")
     try:
         default_branch = repo.default_branch
         pages_url = f"https://api.github.com/repos/{repo.full_name}/pages"
@@ -166,13 +170,13 @@ def enable_github_pages(repo):
         payload = {"source": {"branch": default_branch, "path": "/"}}
         response = requests.post(pages_url, headers=headers, json=payload)
         if response.status_code == 201:
-            print("📜 GitHub Pages enabled successfully.")
+            logging.info("📜 GitHub Pages enabled successfully.")
             return f"https://{GITHUB_USERNAME}.github.io/{repo.name}/"
         else:
-            print(f"🚨 GitHub Pages Error: {response.status_code} - {response.text}")
+            logging.error(f"🚨 GitHub Pages Error: {response.status_code} - {response.text}")
             return None
     except Exception as e:
-        print(f"🚨 GitHub Pages Error: {e}")
+        logging.error(f"🚨 GitHub Pages Error: {e}")
         return None
 
 def notify_evaluation_api(data, repo_url, pages_url, commit_sha):
@@ -181,21 +185,21 @@ def notify_evaluation_api(data, repo_url, pages_url, commit_sha):
         "email": data.get('email'), "task": data.get('task'), "round": data.get('round'),
         "nonce": data.get('nonce'), "repo_url": repo_url, "commit_sha": commit_sha, "pages_url": pages_url,
     }
-    print(f"📢 Pinging evaluation API with: {payload}")
+    logging.info(f"📢 Pinging evaluation API with: {payload}")
     retries = 4
     delay = 1
     for i in range(retries):
         try:
             response = requests.post(data.get('evaluation_url'), json=payload, timeout=10)
             if response.status_code == 200:
-                print(f"📢 Evaluation API responded with status: {response.status_code}")
+                logging.info(f"📢 Evaluation API responded with status: {response.status_code}")
                 return
         except Exception as e:
-            print(f"🚨 Evaluation API Error: {e}")
-        print(f"Retrying in {delay} seconds...")
+            logging.error(f"🚨 Evaluation API Error: {e}")
+        logging.info(f"Retrying in {delay} seconds...")
         time.sleep(delay)
         delay *= 2
-    print("🚨 Failed to notify evaluation API after multiple retries.")
+    logging.error("🚨 Failed to notify evaluation API after multiple retries.")
 
 # --- BACKGROUND WORKERS ---
 
@@ -204,24 +208,24 @@ def process_build_request(data):
     try:
         html_code = generate_code_from_brief(data.get('brief'), data.get('checks'), data.get('attachments'))
         if not html_code:
-            print("Stopping process due to LLM failure.")
+            logging.error("Stopping process due to LLM failure.")
             return
 
         repo = create_github_repo(data.get('task'), html_code, data.get('brief'))
         if not repo:
-            print("Stopping process due to GitHub repo creation failure.")
+            logging.error("Stopping process due to GitHub repo creation failure.")
             return
 
         pages_url = enable_github_pages(repo)
         if not pages_url:
-            print("Stopping process due to GitHub Pages failure.")
+            logging.error("Stopping process due to GitHub Pages failure.")
             return
 
         commit_sha = repo.get_contents("index.html").sha
         notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
-        print("✅✅✅ Round 1 process completed! ✅✅✅")
+        logging.info("✅✅✅ Round 1 process completed! ✅✅✅")
     except Exception as e:
-        print(f"🚨 Round 1 Error: {e}")
+        logging.error(f"🚨 Round 1 Error: {e}")
         import traceback
         traceback.print_exc()
 
@@ -229,11 +233,11 @@ def process_revise_request(data):
     """The main worker for Round 2: Revise and Redeploy."""
     try:
         repo_name = data.get('task')
-        print(f"🔄 Starting Round 2 revision for repo: {repo_name}")
+        logging.info(f"🔄 Starting Round 2 revision for repo: {repo_name}")
         try:
             repo = g.get_user().get_repo(repo_name)
         except UnknownObjectException:
-            print(f"🚨 Round 2 Error: Repository '{repo_name}' not found.")
+            logging.error(f"🚨 Round 2 Error: Repository '{repo_name}' not found.")
             return
 
         try:
@@ -241,13 +245,13 @@ def process_revise_request(data):
             existing_readme_file = repo.get_contents("README.md")
             existing_html = existing_html_file.decoded_content.decode('utf-8')
         except Exception as e:
-            print(f"🚨 Round 2 Error: Could not fetch existing files. {e}")
+            logging.error(f"🚨 Round 2 Error: Could not fetch existing files. {e}")
             return
 
         new_brief = data.get('brief')
         updated_html = generate_revision_from_brief(new_brief, existing_html, data.get('checks'))
         if not updated_html:
-            print("Stopping Round 2 due to LLM failure.")
+            logging.error("Stopping Round 2 due to LLM failure.")
             return
 
         try:
@@ -262,17 +266,17 @@ def process_revise_request(data):
                 path="README.md", message="docs: update README for round 2",
                 content=updated_readme, sha=existing_readme_file.sha
             )
-            print("🐙 Updated index.html and README.md in the repo.")
+            logging.info("🐙 Updated index.html and README.md in the repo.")
         except Exception as e:
-            print(f"🚨 Round 2 Error: Failed to update files on GitHub. {e}")
+            logging.error(f"🚨 Round 2 Error: Failed to update files on GitHub. {e}")
             return
             
         pages_url = f"https://{GITHUB_USERNAME}.github.io/{repo.name}/"
         
         notify_evaluation_api(data, repo.html_url, pages_url, commit_sha)
-        print("✅✅✅ Round 2 process completed! ✅✅✅")
+        logging.info("✅✅✅ Round 2 process completed! ✅✅✅")
     except Exception as e:
-        print(f"🚨 Round 2 Unexpected Error: {e}")
+        logging.error(f"🚨 Round 2 Unexpected Error: {e}")
         import traceback
         traceback.print_exc()
 
@@ -280,19 +284,19 @@ def process_revise_request(data):
 @app.route('/api-endpoint', methods=['POST'])
 def handle_request():
     """Receives requests and routes them to the correct background worker."""
-    print("✅ Request received!")
+    logging.info("✅ Request received!")
     data = request.get_json()
 
     if not data or data.get('secret') != os.getenv("MY_SECRET"):
-        print("🚨 ERROR: Invalid secret!")
+        logging.error("🚨 ERROR: Invalid secret!")
         return jsonify({"error": "Invalid secret"}), 403
 
     round_number = data.get('round', 1)
     if round_number == 2:
-        print("✅ Secret verified. Starting Round 2 background job.")
+        logging.info("✅ Secret verified. Starting Round 2 background job.")
         thread = threading.Thread(target=process_revise_request, args=(data,))
     else:
-        print("✅ Secret verified. Starting Round 1 background job.")
+        logging.info("✅ Secret verified. Starting Round 1 background job.")
         thread = threading.Thread(target=process_build_request, args=(data,))
     
     thread.start()
